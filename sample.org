@@ -1,0 +1,531 @@
+* Plot training log
+
+We read the tensorflow training log and plot it.
+
+#+begin_src python :results file :session
+import matplotlib
+import csv
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pandas as pd
+
+history = pd.read_csv('training.log')  
+
+fig, ((axs0, axs1), (axs2, axs3)) = plt.subplots(2, 2, sharex = True)
+axs0.plot(history["f_diet_loss"], label = "f_diet_loss")
+axs0.plot(history["f_mobility_loss"], label = "f_mobility_loss")
+axs0.plot(history["reconstruction_loss"], label = "reconstruction_loss")
+axs0.plot(history["f_recycling_loss"], label = "f_recycling_loss")
+axs0.plot(history["f_co2_loss"], label = "f_co2_loss")
+axs0.set_title("Reconstruction losses")
+axs0.legend()
+
+axs1.plot(history["kl_loss"])
+axs1.set_title("KL divergence")
+axs1.set_xlabel("Epoch")
+
+axs2.plot(history["val_reconstruction_loss"])
+axs2.set_title("Validation reconstruction loss")
+axs2.legend()
+
+axs3.plot(history["val_kl_loss"])
+axs3.set_title("Validation KL divergence")
+axs3.set_xlabel("Epoch")
+
+fig.tight_layout()
+
+fname = 'images/training_plot.png'
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/training_plot2.png]]
+
+* Load decoder 
+
+This loads the decoder for further sampling.
+
+#+begin_src python :session :tangle yes :results output
+import numpy as np
+from tensorflow import keras
+from scipy.stats import norm
+
+decoder = keras.models.load_model("decoder_hyper_2.pb")
+#+end_src
+
+* Sample recycling preferences from latent space
+
+#+begin_src python :results file :session
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+fig, axs = plt.subplots(5, 5, sharex = True)
+
+n = 5
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+cutoff_value = 0.5
+
+def get_recycling_pref(sample):
+   samples_t = []
+
+   # Returns the binary values based on cutoff value
+   for p in sample:
+     ps = [0, 0, 0, 0, 0]
+
+     ps[0] = int(p[0] >= cutoff_value)
+     ps[1] = int(p[1] >= cutoff_value)
+     ps[2] = int(p[2] >= cutoff_value)
+     ps[3] = int(p[3] >= cutoff_value)
+     ps[4] = int(p[4] >= cutoff_value)
+ 
+     samples_t.append(ps)
+    
+   return samples_t
+
+for i, yi in enumerate(grid_y):
+  for j, xi in enumerate(grid_x):
+    # Samples from the decoder
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+    sample = x_decoded[0].reshape(128, 16)
+
+    # Converts sample back to binary features
+    sample_t = get_recycling_pref(sample)
+
+    # Plots all values
+    axs[j, i].plot(list(range(128)), [s[0] for s in sample_t], label = "plastic")
+    axs[j, i].plot(list(range(128)), [s[1] for s in sample_t], label = "glass")
+    axs[j, i].plot(list(range(128)), [s[2] for s in sample_t], label = "magazines")
+    axs[j, i].plot(list(range(128)), [s[3] for s in sample_t], label = "newspapers")
+    axs[j, i].plot(list(range(128)), [s[4] for s in sample_t], label = "metals")
+
+    # Sets plot properties
+    axs[j, i].set_ylim(-0.1, 1.1)
+    axs[j, i].set_yticks([0, 1])
+    axs[j, i].set_yticklabels(["no", "yes"])
+
+    # Adds label to x axis for last row
+    if j == (n - 1):
+      axs[j, i].set_xlabel("t")
+
+fname = 'images/sample_recycle.png'
+fig.set_size_inches(10, 7)
+fig.tight_layout(rect=[0.0,0.0,1,0.9])
+plt.legend(loc='upper center', fancybox=True, shadow=True, ncol=5, bbox_to_anchor=(-2.2, 6.5))
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:sample_recycle.png]]
+
+[[file:sample_recycle.png]]
+
+* Sample car mobility preferences from latent space
+
+#+begin_src python :results file :session
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pickle
+
+n = 5
+fig, axs = plt.subplots(n, n, sharex = True, sharey = True)
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+
+# Loads the rescaling values from a file
+mobility_max = pickle.load(open("dataset_mobility_max.p", "rb"))
+
+for i, yi in enumerate(grid_y):
+  for j, xi in enumerate(grid_x):
+    # Samples from the decoder
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+    sample = x_decoded[0].reshape(128, 16)
+
+    # Plots the rescaled mobility value
+    axs[j, i].plot(list(range(128)), [s[5] * mobility_max[0] for s in sample])
+
+    # Add y-axis labels to the first column
+    if i == 0:
+      axs[j, i].set_ylabel("km / year")
+
+    # Add a x-axis label to the last row
+    if j == (n - 1):
+      axs[j, i].set_xlabel("t")
+
+fname = 'images/sample_mobility_car.png'
+fig.set_size_inches(10, 7)
+fig.tight_layout()
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/sample_mobility_car.png]]
+
+* Sample plane mobility preferences from latent space
+
+#+begin_src python :results file :session
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pickle
+
+mobility_max = pickle.load(open("dataset_mobility_max.p", "rb"))
+
+n = 5
+fig, axs = plt.subplots(n, n, sharex = True, sharey = True)
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+
+for i, yi in enumerate(grid_y):
+  for j, xi in enumerate(grid_x):
+    # Samples from the decoder
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+    sample = x_decoded[0].reshape(128, 16)
+
+    # Plots the plane mobility preferences
+    axs[j, i].plot(list(range(128)), [int(round(s[6] * mobility_max[1])) for s in sample], label = "short-range")
+    axs[j, i].plot(list(range(128)), [int(round(s[7] * mobility_max[2])) for s in sample], label = "mid-range")
+    axs[j, i].plot(list(range(128)), [int(round(s[8] * mobility_max[3])) for s in sample], label = "long-lange")
+
+    # Add y-axis labels to the first column
+    if i == 0:
+      axs[j, i].set_ylabel("annual flights")
+
+    # Add a x-axis label to the last row
+    if j == (n - 1):
+      axs[j, i].set_xlabel("t")
+
+fname = 'images/sample_mobility_plane.png'
+fig.set_size_inches(10, 7)
+fig.tight_layout(rect=[0.0,0.0,1,0.9])
+plt.legend(loc='upper center', fancybox=True, shadow=True, ncol=5, bbox_to_anchor=(-1.7, 6.5))
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/sample_mobility_plane.png]]
+* Sample co2 poll votes from latent space
+
+#+begin_src python :results file :session
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+n = 5
+fig, axs = plt.subplots(n, n, sharex = True, sharey = True)
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+
+vote_categories = ["abstain", "lower", "maintain", "raise"]
+
+for i, yi in enumerate(grid_y):
+  for j, xi in enumerate(grid_x):
+    # Samples from the decoder
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+    sample = x_decoded[0].reshape(128, 16)
+
+    # Transforms the one-hot encoded features back into a categorical variable
+    vote_decoded = np.argmax(sample[:, 9:13], axis = 1)
+    vote_decoded = [3 - i for i in vote_decoded]
+
+    # Plots the values
+    axs[j, i].plot(vote_decoded)
+    axs[j, i].set_yticks([0,1,2,3])
+    axs[j, i].set_yticklabels(vote_categories)
+
+    # Adds an x-axis label to the last row
+    if j == (n - 1):
+      axs[j, i].set_xlabel("t")
+
+fname = 'images/sample_co2poll.png'
+fig.set_size_inches(10, 7)
+plt.tight_layout()
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/sample_co2poll.png]]
+
+* Sample diet preferences from latent space
+
+#+begin_src python :results file :session
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+n = 5
+fig, axs = plt.subplots(n, n, sharex = True, sharey = True)
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+
+for j, xi in enumerate(grid_x):
+  for i, yi in enumerate(grid_y):
+    # Samples from the decoder
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+    sample = x_decoded[0].reshape(128, 16)
+
+    # Plots the diet preferences
+    axs[j, i].plot(list(range(128)), [p[13] for p in sample])
+    axs[j, i].set_ylim([0.0, 1.0])
+
+    # Adds an x-axis label to the last row
+    if j == (n - 1):
+      axs[j, i].set_xlabel("t")
+
+fname = 'images/sample_diet.png'
+fig.set_size_inches(10, 7)
+plt.tight_layout()
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/sample_diet.png]]
+
+* Sample distributions
+
+We sample the marginal distributions from the test set and decoder.
+
+#+begin_src python :results file :session
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pickle
+import numpy as np
+from scipy.stats import norm
+from tensorflow import keras
+
+n = 50
+
+# Loads and gets n^2 samples from the dataset
+dataset_test = pickle.load(open("dataset_test.p", "rb"))
+dataset_sample = dataset_test[np.random.choice(len(dataset_test), n * n), :, :]
+dataset_sample = dataset_sample.reshape(-1, dataset_sample.shape[-1])
+
+# Transforms coordinates on the unit square
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+
+# Initializes list for samples
+samples_list = []
+
+# Performs sampling from latent space
+for i, yi in enumerate(grid_y):
+  for j, xi in enumerate(grid_x):
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+
+    sample = x_decoded[0].reshape(128, 16)
+    samples_list.append(sample)
+
+# Builds numpy array from samples
+samples_np = np.vstack(samples_list)
+
+# Creates plot
+fig, axs = plt.subplots(4, 4)
+
+title_list = [
+  'recycling_plastic',
+  'recycling_glass',
+  'recycling_magazines',
+  'recycling_newspapers',
+  'recycling_metals',
+  'mobility_car',
+  'mobility_plane0',
+  'mobility_plane1',
+  'mobility_plane2',
+  'co2_poll_raise',
+  'co2_poll_maintain',
+  'co2_poll_lower',
+  'co2_poll_abstain',
+  'diet'
+]
+
+# Plots all feature histograms
+for x in range(0,4):
+  for y in range(0,4):
+    # Deletes padding features from grid
+    if (x == 3) and ((y == 2) or (y == 3)):
+      axs[x,y].set_axis_off()
+      continue
+
+    axs[x,y].hist(dataset_sample[:, x * 4 + y], bins = 20, range = (0.0, 1.0), alpha = 0.5, color = "blue")
+    axs[x,y].hist(samples_np[:, x * 4 + y], bins = 20, range=(0.0, 1.0), alpha = 0.5, color = "orange")
+    axs[x,y].set_title(title_list[x * 4 + y])
+    axs[x,y].set_xlim([0.0, 1.0])
+
+fname = 'images/histogram.png'
+fig.set_size_inches(10, 7)
+fig.tight_layout()
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/density_hyper_1.png]]
+
+* Plot GHG distribution 
+
+#+begin_src python :session :tangle no :results file
+from epa_ghg_calculator import calculate_co2
+import numpy as np
+from tensorflow import keras
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.stats import norm, kstest, wasserstein_distance
+
+n = 50
+
+# Loads test set and rescaling values
+mobility_max = pickle.load(open("dataset_mobility_max.p", "rb"))
+dataset_test = pickle.load(open("dataset_test.p", "rb"))
+
+# Samples from dataset and rescales numerical features
+dataset_sample = dataset_test[np.random.choice(len(dataset_test), n * n), :, :]
+dataset_sample = np.mean(dataset_sample, axis = 1)
+dataset_sample[:,5] *= mobility_max[0]
+dataset_sample[:,6] *= mobility_max[1]
+dataset_sample[:,7] *= mobility_max[2]
+
+# Calculates the GHG footprints for the test set sample
+co2_footprints_dataset = calculate_co2(dataset_sample.reshape(-1, dataset_sample.shape[-1]))
+
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+
+co2_footprints_sample = []
+
+# Samples from latent space
+for j, xi in enumerate(grid_x):
+  print(j)
+  for i, yi in enumerate(grid_y):
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+
+    sample = x_decoded[0].reshape(128, 16)
+
+    sample = np.mean(sample, axis = 0)
+
+    sample[5] *= mobility_max[0]
+    sample[6] *= mobility_max[1]
+    sample[7] *= mobility_max[2]
+
+    co2_footprints_sample.extend(calculate_co2([sample]))
+
+    
+# Prints the KS test result and Wasserstein distance
+print(kstest(co2_footprints_dataset, co2_footprints_sample))
+print(wasserstein_distance(co2_footprints_dataset, co2_footprints_sample))
+   
+
+# Creates a plot of the carbon emissions
+fig, (axs1, axs2) = plt.subplots(2, 1, sharex = True)
+fig.set_size_inches(10, 7)
+
+axs1.hist(co2_footprints_dataset, bins = 50, range = (0.0, 4.5E-9))
+axs1.set_title("Distribution of GHG emissions (test set)")
+axs2.hist(co2_footprints_sample, bins = 50, range = (0.0, 4.5E-9))
+axs2.set_title("Distribution of GHG emissions (generated)")
+axs2.set_xlabel("Gt of CO2-equivalent")
+
+fname = 'images/ghg_baseline.png'
+plt.tight_layout()
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/ghg_hyper_2.png]]
+
+* Plot GHG ECDF
+
+#+begin_src python :session :tangle no :results file
+from epa_ghg_calculator import calculate_co2
+import numpy as np
+from tensorflow import keras
+import pickle
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.stats import norm, anderson_ksamp, wasserstein_distance, ks_2samp
+from statsmodels.distributions.empirical_distribution import ECDF
+
+n = 50
+
+# Loads scaling values and dataset
+mobility_max = pickle.load(open("dataset_mobility_max.p", "rb"))
+dataset_test = pickle.load(open("dataset_test.p", "rb"))
+
+# Samples n^2 from test set
+dataset_sample = dataset_test[np.random.choice(len(dataset_test), n * n), :, :]
+dataset_sample = np.mean(dataset_sample, axis = 1)
+
+# Rescales numerical features
+dataset_sample[:,5] *= mobility_max[0]
+dataset_sample[:,6] *= mobility_max[1]
+dataset_sample[:,7] *= mobility_max[2]
+
+# Calculates the GHG emissions for the test set sample
+co2_footprints_dataset = calculate_co2(dataset_sample.reshape(-1, dataset_sample.shape[-1]))
+
+
+grid_x = norm.ppf(np.linspace(0.01, 0.99, n))
+grid_y = norm.ppf(np.linspace(0.01, 0.99, n))
+
+co2_footprints_sample = []
+
+# Samples from latent space
+for j, xi in enumerate(grid_x):
+  print(j)
+  for i, yi in enumerate(grid_y):
+    z_sample = np.array([[xi, yi]])
+    x_decoded = decoder.predict(z_sample)
+
+    sample = x_decoded[0].reshape(128, 16)
+
+    sample = np.mean(sample, axis = 0)
+
+    sample[5] *= mobility_max[0]
+    sample[6] *= mobility_max[1]
+    sample[7] *= mobility_max[2]
+
+    co2_footprints_sample.extend(calculate_co2([sample]))
+
+#print(kstest(co2_footprints_dataset, co2_footprints_sample))
+print(ks_2samp(co2_footprints_dataset, co2_footprints_sample))
+print(anderson_ksamp([co2_footprints_dataset, co2_footprints_sample]))
+print(wasserstein_distance(co2_footprints_dataset, co2_footprints_sample))
+
+# Creates the ECDF plot
+fig, axs1 = plt.subplots()
+fig.set_size_inches(10, 7)
+
+axs1.set_title("Empirical CDF of GHG emissions")
+x_dataset = np.sort(co2_footprints_dataset)
+y_dataset = np.arange(len(x_dataset))/float(len(x_dataset))
+x_sample = np.sort(co2_footprints_sample) 
+y_sample = np.arange(len(x_dataset))/float(len(x_dataset))
+axs1.plot(x_dataset, y_dataset, color = "blue")
+axs1.plot(x_sample, y_sample, color = "orange")
+
+fname = 'images/ghg_ecdf_baseline.png'
+plt.tight_layout()
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/ghg_ecdf_baseline.png]]

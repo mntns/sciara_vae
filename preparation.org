@@ -1,0 +1,240 @@
+* Setup
+
+#+begin_src python :session :tangle yes
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+#+end_src
+
+#+RESULTS:
+
+* Data pre-processing
+
+First we parse the data end filter it.
+
+#+begin_src python :session :tangle yes :results output
+import collections
+import json
+import bson
+import numpy as np
+import pandas as pd
+import math
+
+def load_dataset(path, agents):
+  table = "agent_variables_state"
+
+  agent_state_file = open("../datasets/{}/{}.bson".format(path, table), "rb")
+  bson_opts = bson.CodecOptions(document_class=collections.OrderedDict, unicode_decode_error_handler="ignore")
+  agent_states = bson.decode_all(agent_state_file.read())
+  agent_states = filter_agents(agent_states, agents)
+
+  agent_states_vec = [build_vec(s) for s in agent_states]
+
+  # Builds the dataframe
+  agent_states_df = pd.DataFrame(agent_states_vec, columns = [
+     'aid',
+     'simulation_time',
+     'recycling_plastic',
+     'recycling_glass',
+     'recycling_magazines',
+     'recycling_newspapers',
+     'recycling_metals',
+     'mobility_car',
+     'mobility_plane0',
+     'mobility_plane1',
+     'mobility_plane2',
+     'co2_poll_raise',
+     'co2_poll_maintain',
+     'co2_poll_lower',
+     'co2_poll_abstain',
+     'diet'
+  ])
+
+  # Resamples the dataframe based on simulation time
+  df_resampled = agent_states_df.drop_duplicates(subset = "simulation_time").set_index("simulation_time").groupby("aid").resample("D")
+  df_interpolated = df_resampled.ffill().dropna()
+  df_interpolated.reset_index(drop = True, inplace = True)
+
+  return df_interpolated
+
+def build_vec(s):
+    variables = s['variables']
+
+    return [
+        # General metadata
+        s['agentStateId'],
+        s['simulationTime'], 
+
+        # Recycling (0:5)
+        float(variables['recyclingSelection']['plastic']),
+        float(variables['recyclingSelection']['glass']),
+        float(variables['recyclingSelection']['magazines']),
+        float(variables['recyclingSelection']['newspapers']),
+        float(variables['recyclingSelection']['aluminumAndSteel']),
+
+        # Mobility (5:9)
+        float(variables['mobility']['car']['annualKilometersByCar']),
+        float(variables['mobility']['airplane'][0]['numberTrips']),
+        float(variables['mobility']['airplane'][1]['numberTrips']),
+        float(variables['mobility']['airplane'][2]['numberTrips']),
+
+        # Co2 Poll (9:13)
+        float(variables['votings'][0]['value'] == "raise"),
+        float(variables['votings'][0]['value'] == "maintain"),
+        float(variables['votings'][0]['value'] == "lower"),
+        float(variables['votings'][0]['value'] == "abstain"),
+
+        # Diet (13:14)
+        float(variables['foodPreferences']['vegan2MeatScale']),
+	]
+
+def filter_agents(agent_states, selection):
+  return [s for s in agent_states if 'simulationTime' in s and s['agentStateId'] in selection]
+
+# Loads datasets
+dataset1 = load_dataset("core_2021-02-16", [790, 794, 796, 799, 802, 805, 806])
+dataset2 = load_dataset("core_2021-05-07", [1022, 1024, 1025, 1026, 1027, 1028, 1029, 1030, 1031, 1032, 1033, 1035, 1036, 1038, 1043, 1044, 1048, 1049])
+
+# Concatenates datasets
+df_interpolated = pd.concat([dataset1, dataset2])
+#+end_src
+
+#+RESULTS:
+
+* Filter out beginnings of simulation time
+
+This is unused code for post-hoc analysis.
+
+#+begin_src python :session :tangle no :results output
+# start_ratio = []
+
+# for aid, data in df_interpolated.groupby('aid'):
+#   aid_np = data.reset_index(drop = True).drop('aid', axis = 1).to_numpy().astype('float32')
+
+#   unchanged_feature_indices = np.where(np.std(aid_np, axis = 0) == 0)
+#   check_np = np.delete(aid_np, unchanged_feature_indices, axis = 1)
+#   #print("{} {}".format(aid_np.shape, check_np.shape))
+
+#   start_idx = 0
+
+#   for i in range(1, check_np.shape[0]):
+#     if np.not_equal(check_np[0, :], check_np[i, :]).all():
+#       start_idx = i
+#       break
+
+#   start_ratio.append(start_idx / check_np.shape[0])
+
+# print(sum(start_ratio) / len(start_ratio))
+#+end_src
+
+#+RESULTS:
+: 0.31286243380268963
+
+* FFT for time windows
+
+Here we perform a feature-wise FFT on the dataset
+
+#+begin_src python :session :tangle no :results file
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+dataset2["mobility_car"] /= dataset2["mobility_car"].max()
+dataset2["mobility_plane0"] /= dataset2["mobility_plane0"].max()
+dataset2["mobility_plane1"] /= dataset2["mobility_plane1"].max()
+dataset2["mobility_plane2"] /= dataset2["mobility_plane2"].max()
+
+fft_means = []
+
+for aid, aid_data in dataset2.groupby('aid'):
+  fft_aid_df = aid_data.apply(lambda f : np.abs(tf.signal.rfft(f.to_numpy()))).drop(["aid"], axis = 1)
+  fft_mean = fft_aid_df.mean(axis = 1)
+  fft_means.append(fft_mean.to_numpy()[0:9131])
+
+fft_total_mean = np.mean(fft_means, axis = 0)
+
+plot_cutoff = len(fft_df)
+plot_cutoff = 1 * 365
+
+plt.figure(figsize=(10, 7))
+plt.xscale('log')
+
+for f in fft_means:
+    plt.step(range(len(f) - 1), f[1:], alpha = 0.05)
+  
+plt.step(range(len(fft_total_mean) - 1), fft_total_mean[1:], label = "mean")
+plt.axvline(128)
+plt.text(128 - 30, 2000,'f = 1/128', rotation=90)
+
+plt.ylim((0, 2500))
+plt.xlabel("Frequency [1/d]")
+plt.ylabel("Amplitude")
+
+#plt.legend()
+fname = 'images/fft.png'
+plt.tight_layout()
+plt.savefig(fname)
+fname
+#+end_src
+
+#+RESULTS:
+[[file:images/fft.png]]
+
+* Normalization of data and sliding windows
+
+We normalize the data and build sliding windows.
+
+#+begin_src python :session :tangle yes :results output
+# Normalize numerical features
+mobility_car_max = df_interpolated["mobility_car"].max()
+mobility_plane0_max = df_interpolated["mobility_plane0"].max()
+mobility_plane1_max = df_interpolated["mobility_plane1"].max()
+mobility_plane2_max = df_interpolated["mobility_plane2"].max()
+
+mobility_max = [
+  mobility_car_max,
+  mobility_plane0_max,
+  mobility_plane1_max,
+  mobility_plane2_max
+]
+
+# Perform scaling
+df_interpolated["mobility_car"] /= mobility_car_max
+df_interpolated["mobility_plane0"] /= mobility_plane0_max
+df_interpolated["mobility_plane1"] /= mobility_plane1_max
+df_interpolated["mobility_plane2"] /= mobility_plane2_max
+
+# Add padding
+df_interpolated["pad0"] = 0.0
+df_interpolated["pad1"] = 0.0
+
+
+window_list = []
+
+# Generates sliding windows for each agent
+for aid, data in df_interpolated.groupby('aid'):
+  aid_np = data.reset_index(drop = True).drop('aid', axis = 1).to_numpy().astype('float32')
+  windows = np.lib.stride_tricks.sliding_window_view(aid_np, (128, 16))[:, 0, :, :]
+  window_list.append(windows)
+
+# Generates a numpy array from the list
+dataset = np.vstack(window_list)
+
+print(dataset.shape)
+#+end_src
+
+Here we save the dataset and the min-max scaling factors.
+
+#+begin_src python :session :tangle yes :results output
+from sklearn.model_selection import train_test_split
+import pickle
+
+dataset_train, dataset_test = train_test_split(dataset)
+
+pickle.dump(dataset_train, open("dataset_train.p", "wb"))
+pickle.dump(dataset_test, open("dataset_test.p", "wb"))
+pickle.dump(mobility_max, open("dataset_mobility_max.p", "wb"))
+#+end_src
+
+#+RESULTS:
